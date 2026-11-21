@@ -22,4 +22,8 @@ docker system prune -af 2>/dev/null || true
 
 echo "::group::Disk after cleanup"
 df -h /
+available="$(df -PB1 / 2>/dev/null | awk 'NR==2 {print $4}')"
+if [ -n "${available}" ] && [ "${available}" -lt 26843545600 ]; then
+  echo "::warning::Less than 25 GiB free after cleanup; large firmware may run out of disk"
+fi
 echo "::endgroup::"

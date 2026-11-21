@@ -95,7 +95,7 @@ Conversion is much lighter than an AOSP build, but large firmware still needs ro
 
 | Runner | Notes |
 | --- | --- |
-| `ubuntu-latest` | Works for small/medium firmware after the disk-cleanup step; large HyperOS/One UI packages may run out of space. |
+| `ubuntu-24.04` (default) | Works for small/medium firmware after the disk-cleanup step; large HyperOS/One UI packages may run out of space. |
 | Larger GitHub runner | Set `runner` to the larger-runner label. |
 | Self-hosted | Recommended for big firmware; also required if `firmware` is a local path. |
 

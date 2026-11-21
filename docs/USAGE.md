@@ -123,7 +123,7 @@ A build peak includes:
 3. unpacked filesystem trees (roughly partition size),
 4. the output image and optional ZIP.
 
-`ubuntu-latest` starts with ~14 GB free; the cleanup step raises this to roughly 35–45 GB. Small and medium firmware fits; very large dynamic-partition packages may not. Use a larger runner or self-hosted machine for those, and disable `compress` to avoid keeping both raw and ZIP outputs.
+`ubuntu-24.04` starts with ~14 GB free; the cleanup step raises this to roughly 35–45 GB. Small and medium firmware fits; very large dynamic-partition packages may not. Use a larger runner or self-hosted machine for those, and disable `compress` to avoid keeping both raw and ZIP outputs.
 
 ## Debugging a failed run
 

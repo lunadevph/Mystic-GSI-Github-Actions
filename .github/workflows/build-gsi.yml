@@ -84,7 +84,7 @@ on:
       runner:
         description: Runner label (large firmware needs disk; self-hosted recommended)
         required: true
-        default: ubuntu-latest
+        default: ubuntu-24.04
         type: string
       upload_release:
         description: Publish a GitHub release with the image
