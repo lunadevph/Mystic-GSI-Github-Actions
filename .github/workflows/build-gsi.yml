@@ -1,0 +1,160 @@
+name: Build Mystic GSI
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: GSI lunch target
+        required: true
+        type: choice
+        default: treble_arm64_bvN
+        options:
+          - treble_arm64_bvN
+          - treble_arm64_bgN
+          - treble_arm64_avN
+          - treble_arm64_agN
+          - treble_arm32_bvN
+          - treble_arm32_bgN
+          - treble_a64_bvN
+          - treble_a64_bgN
+      manifest_url:
+        description: Manifest repository (TrebleDroid-compatible)
+        required: true
+        type: string
+        default: https://github.com/TrebleDroid/treble_manifest.git
+      manifest_branch:
+        description: Manifest branch (list with `git ls-remote --heads <url>`)
+        required: true
+        type: string
+        default: android-14.0.0_r1
+      runner:
+        description: Runner label (needs ~16 cores, 64 GB RAM, 200 GB free disk)
+        required: true
+        type: string
+        default: ubuntu-latest
+      upload_release:
+        description: Publish a GitHub release with the image
+        required: true
+        type: boolean
+        default: true
+      retention_days:
+        description: Artifact retention in days
+        required: false
+        type: number
+        default: 14
+
+concurrency:
+  group: gsi-${{ github.ref }}-${{ inputs.variant }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ inputs.variant }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      artifact: ${{ steps.meta.outputs.artifact }}
+
+    env:
+      MANIFEST_URL: ${{ inputs.manifest_url }}
+      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
+      LUNCH_TARGET: ${{ inputs.variant }}
+      SOURCE_DIR: ${{ github.workspace }}/source
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
+
+    steps:
+      - name: Check out pipeline
+        uses: actions/checkout@v4
+
+      - name: Prepare metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y%m%d-%H%M)"
+          tag="mystic-${LUNCH_TARGET}-${stamp}"
+          artifact="mystic-gsi-${LUNCH_TARGET}-${stamp}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
+          echo "Building ${LUNCH_TARGET} from ${MANIFEST_URL}@${MANIFEST_BRANCH}"
+          echo "Release tag: ${tag}"
+
+      - name: Prepare runner
+        run: bash scripts/00-setup-runner.sh
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ inputs.manifest_branch }}-${{ inputs.variant }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.manifest_branch }}-${{ inputs.variant }}-
+            ccache-${{ inputs.manifest_branch }}-
+
+      - name: Sync sources
+        run: bash scripts/10-sync.sh
+
+      - name: Build system image
+        run: bash scripts/20-build.sh
+
+      - name: Package image
+        run: bash scripts/30-package.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Mystic GSI build"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Variant | \`${LUNCH_TARGET}\` |"
+            echo "| Manifest | \`${MANIFEST_URL}\` |"
+            echo "| Branch | \`${MANIFEST_BRANCH}\` |"
+            echo "| Runner | \`${{ inputs.runner }}\` |"
+            echo "| Status | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Publish release
+    needs: build
+    if: ${{ inputs.upload_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: Mystic GSI ${{ inputs.variant }} (${{ needs.build.outputs.tag }})
+          body: |
+            Automated Mystic GSI build.
+
+            - Variant: `${{ inputs.variant }}`
+            - Manifest: `${{ inputs.manifest_url }}`
+            - Branch: `${{ inputs.manifest_branch }}`
+            - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

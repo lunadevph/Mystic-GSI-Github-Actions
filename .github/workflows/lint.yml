@@ -1,0 +1,47 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck --version && shellcheck scripts/*.sh
+
+      - name: Validate workflow YAML
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import glob
+          import sys
+          import yaml
+
+          failed = False
+          for path in sorted(glob.glob(".github/workflows/*.yml")):
+              try:
+                  with open(path, encoding="utf-8") as handle:
+                      yaml.safe_load(handle)
+              except Exception as exc:  # noqa: BLE001
+                  failed = True
+                  print(f"invalid: {path}: {exc}")
+              else:
+                  print(f"ok: {path}")
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Validate shell syntax
+        run: |
+          for script in scripts/*.sh; do
+            bash -n "$script"
+            echo "ok: $script"
+          done

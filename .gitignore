@@ -1,0 +1,18 @@
+# Build outputs
+/artifacts/
+/source/
+/out/
+*.img
+*.img.xz
+*.img.xz.sha256
+
+# Tooling caches
+/.ccache/
+/.repo/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
