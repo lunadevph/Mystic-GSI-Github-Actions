@@ -37,7 +37,7 @@ System partitions may be ext4, EROFS, or F2FS. ROM types include Pixel, Samsung 
 2. Go to **Actions → Build GSI from OEM firmware → Run workflow**.
 3. Enter the build name and a **direct** firmware URL (Google Drive and other interstitial pages do not work; MysticGSI downloads with `aria2c`).
 4. Pick a ROM type (`auto` usually works), filesystem, and options.
-5. Download the artifact, or grab the release if `upload_release` is enabled.
+5. Download the raw `.img` from the run's `mystic-gsi-*-image` artifact. The release (when enabled) contains only metadata and checksums — GitHub caps release assets at 2 GB.
 
 Example inputs:
 
@@ -47,7 +47,7 @@ Example inputs:
 | `firmware` | `https://dl.google.com/dl/android/aosp/raven-up1a.231105.003-factory-76a795d5.zip` |
 | `type` | `pixel` |
 | `format` | `ext4` |
-| `compress` | `true` |
+| `compress` | `false` |
 
 ## Inputs
 
@@ -58,12 +58,12 @@ Example inputs:
 | `type` | `auto` | `--type` |
 | `type_override` | empty | `--type <type>:<override>` |
 | `format` | `ext4` | `--format` for `lz4`/`lz4hc`/`lzma`; omitted for ext4 |
-| `compress` | `true` | `--compress` (ZIP next to the image) |
+| `compress` | `false` | `--compress` (optional ZIP; off by default) |
 | `no_debloat` | `false` | `--no-debloat` |
 | `no_merge` | `false` | `--no-merge` (separate system/product images) |
 | `add_tag` | empty | `--add` |
 | `mystic_ref` | `main` | upstream branch, tag, or full commit SHA |
-| `runner` | `ubuntu-latest` | runner label |
+| `runner` | `ubuntu-24.04` | runner label |
 | `upload_release` | `true` | publish a release |
 | `retention_days` | `14` | artifact retention |
 
@@ -71,19 +71,37 @@ Example inputs:
 
 ## Outputs
 
-MysticGSI writes to `out/<name>/`; the wrapper mirrors it into the artifact:
+MysticGSI writes to `out/<name>/`. The build run publishes **two artifacts**:
+
+| Artifact | Contents |
+| --- | --- |
+| `mystic-gsi-<name>-<timestamp>-image` | Raw `.img` files only — no ZIP, no repackaging. |
+| `mystic-gsi-<name>-<timestamp>-meta` | `build-info.txt`, `SHA256SUMS`, `build.log`, `gsilist.json`, `output.txt`. |
 
 ```
-artifacts/
-├── <rom>-<codename>-<android>-<incremental>-AB-<date>-MysticGSI.img
-├── <...>.img.zip                 # when compress=true
-├── output.txt                    # MysticGSI build summary
-├── build.log                     # full conversion log
-├── SHA256SUMS
-└── build-info.txt                # upstream commit, firmware hash, flags, sizes
+image artifact/
+└── <rom>-<codename>-<android>-<incremental>-AB-<date>-MysticGSI.img
+
+meta artifact/
+├── build-info.txt       # upstream commit, firmware hash, flags, sizes
+├── SHA256SUMS           # checksums of the .img files above
+├── build.log
+├── gsilist.json
+└── output.txt
 ```
 
 With `no_merge=true`, images get a `-separate` suffix and each partition (`system`, `product`, …) is built separately.
+
+The release job attaches **only the small metadata files** and links back to the run. GitHub limits release assets to 2 GB, so the image is never uploaded as a release asset.
+
+## Get the image from a run
+
+Run **Actions → Get image from workflow run**, enter the source run ID (and optionally an artifact name), and the workflow will:
+
+1. Find the `*-image` and `*-meta` artifacts in that run.
+2. Download the raw `.img` unchanged (no ZIP, no recompression).
+3. Verify it with that run's `SHA256SUMS`.
+4. Re-upload it as `mystic-gsi-image-from-run-<run_id>` for downloading.
 
 ## AVB signing
 
@@ -99,7 +117,7 @@ Conversion is much lighter than an AOSP build, but large firmware still needs ro
 | Larger GitHub runner | Set `runner` to the larger-runner label. |
 | Self-hosted | Recommended for big firmware; also required if `firmware` is a local path. |
 
-The job times out after 6 hours. `ubuntu-latest` is x86_64, matching MysticGSI's bundled Linux binaries.
+The job times out after 6 hours. `ubuntu-24.04` is x86_64, matching MysticGSI's bundled Linux binaries.
 
 ## Reproducibility
 
@@ -127,7 +145,7 @@ Or skip the wrapper and use MysticGSI directly:
 git clone https://github.com/MysticGSI/mysticgsi.git
 cd mysticgsi
 ./setup_host.py
-.venv/bin/python cli.py build mystic /path/to/firmware.zip --type auto --compress
+.venv/bin/python cli.py build mystic /path/to/firmware.zip --type auto
 ```
 
 ## Troubleshooting
@@ -140,7 +158,8 @@ cd mysticgsi
 - **`aria2c not found`** — `setup_host.py` installs it on Debian/Ubuntu; install `aria2` manually on custom runners.
 - **Image does not boot** — GSI compatibility depends on the target device (Treble support, vendor, kernel, vbmeta). Try `ext4` instead of EROFS, and check MysticGSI's notes for your ROM type.
 - **`--no-merge` image does not boot** — separate-partition images require a device that mounts `system`, `product`, and friends separately.
-- **Artifact too large** — disable `compress` (avoids storing both raw and ZIP), or rely on the release upload instead of artifacts.
+- **`Validation Failed: ReleaseAsset ... size must be less than 2147483648`** — a previous release tried to attach the image. Releases now carry metadata only; get the raw image from the run's `*-image` artifact or the **Get image from workflow run** workflow.
+- **Artifact retention** — increase `retention_days`, or re-upload the image with **Get image from workflow run** to give it a fresh retention window.
 
 See [docs/USAGE.md](docs/USAGE.md) for detailed recipes and internals.
 

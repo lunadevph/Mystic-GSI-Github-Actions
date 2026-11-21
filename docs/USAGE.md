@@ -13,6 +13,8 @@ This repository drives [MysticGSI](https://github.com/MysticGSI/mysticgsi) from 
 | Prepare AVB key | inline | Decodes `MYSTIC_AVB_KEY` (PEM or base64) into a temp file when the secret exists. |
 | Build GSI | `scripts/build-gsi.sh` | Maps inputs to `cli.py build` flags and tees the log. |
 | Collect outputs | `scripts/collect-outputs.sh` | Copies `out/`, writes `SHA256SUMS` and `build-info.txt`. |
+| Upload artifacts | inline | Separates the raw `.img` files from the small metadata files. |
+| Publish release | inline | Attaches metadata only and links back to the image artifact. |
 
 ## Input mapping
 
@@ -24,7 +26,7 @@ This repository drives [MysticGSI](https://github.com/MysticGSI/mysticgsi) from 
 | `type_override` | `--type TYPE:OVERRIDE` | Overrides detection for `auto`/`generic`/`custom`. |
 | `format=ext4` | *(no flag)* | Default ext4 image. |
 | `format=lz4/lz4hc/lzma` | `--format` | Builds EROFS instead. |
-| `compress=true` | `--compress` | Adds a ZIP containing `<partition>.img` files. |
+| `compress=true` | `--compress` | Optional ZIP; default is `false`, so only raw `.img` files are produced. |
 | `no_debloat=true` | `--no-debloat` | Keeps apps the patch set would remove. |
 | `no_merge=true` | `--no-merge` | Separate partition images instead of merging into `system`. |
 | `add_tag` | `--add` | Appended to the display name. |
@@ -101,19 +103,14 @@ Produces `*-system.img`, `*-product.img`, and other partition images. Only for d
 
 ## Artifacts and releases
 
-Artifacts contain `out/` plus metadata:
+The build publishes two artifacts:
 
-```
-<name>/<output>.img
-<name>/<output>.img.zip   # if compress=true
-<name>/output.txt
-build.log
-gsilist.json
-SHA256SUMS
-build-info.txt
-```
+| Artifact | Contents |
+| --- | --- |
+| `mystic-gsi-<name>-<timestamp>-image` | `<name>/<output>.img` (and any `-separate` partition images). No ZIP by default. |
+| `mystic-gsi-<name>-<timestamp>-meta` | `build-info.txt`, `SHA256SUMS`, `build.log`, `gsilist.json`, `<name>/output.txt`. |
 
-When `upload_release=true`, the same files are attached to a release tagged `mystic-gsi-<name>-<UTC timestamp>`. Release bodies record the resolved MysticGSI commit.
+When `upload_release=true`, a release tagged `mystic-gsi-<name>-<UTC timestamp>` is created with **only the metadata files** attached. The body links back to the run and names the image artifact. This is because GitHub rejects release assets of 2 GB or more (`Validation Failed: ReleaseAsset ... size must be less than 2147483648`); GSI images routinely exceed that.
 
 `build-info.txt` includes:
 
@@ -121,6 +118,12 @@ When `upload_release=true`, the same files are attached to a release tagged `mys
 - build name, ROM type, format, and flags
 - firmware file name, size, and SHA-256 (when the archive is retained)
 - SHA-256 for every produced image/ZIP
+
+## Get the image from a run
+
+Use **Get image from workflow run** (`workflow_dispatch`) with a source `run_id`. It resolves that run's `-image` and `-meta` artifacts, downloads the raw `.img` unchanged, validates it with `SHA256SUMS`, and re-uploads it as `mystic-gsi-image-from-run-<run_id>` with fresh retention. Optionally pass `artifact_name` if you want a specific artifact instead of auto-detection.
+
+This workflow needs `actions: read` permission (already declared) and only works for runs in the same repository by default.
 
 ## Pinning MysticGSI
 
@@ -141,11 +144,11 @@ A build peak includes:
 3. unpacked filesystem trees (roughly partition size),
 4. the output image and optional ZIP.
 
-`ubuntu-24.04` starts with ~14 GB free; the cleanup step raises this to roughly 35–45 GB. Small and medium firmware fits; very large dynamic-partition packages may not. Use a larger runner or self-hosted machine for those, and disable `compress` to avoid keeping both raw and ZIP outputs.
+`ubuntu-24.04` starts with ~14 GB free; the cleanup step raises this to roughly 35–45 GB. Small and medium firmware fits; very large dynamic-partition packages may not. Use a larger runner or self-hosted machine for those. `compress` defaults to `false`, so only one image is stored instead of both a raw image and a ZIP.
 
 ## Debugging a failed run
 
-1. Check the **Preflight firmware** step output for `.tgz` integrity errors, and the **`<artifact>-logs`** artifact for full `cli.py` output when the build fails. On success that log is inside the main artifact.
+1. Check the **Preflight firmware** step output for `.tgz` integrity errors, and the **`mystic-gsi-*-image-logs`** artifact for full `cli.py` output when the build fails. On success the log is in the `*-meta` artifact.
 2. Confirm the firmware URL is direct and reachable.
 3. Re-run with an explicit `type`.
 4. Check free space in the **Free disk space** step output.

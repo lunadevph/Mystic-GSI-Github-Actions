@@ -57,10 +57,10 @@ on:
           - lz4hc
           - lzma
       compress:
-        description: Also produce a ZIP next to the image
+        description: Also produce a ZIP (off by default; release assets are capped at 2 GB)
         required: true
         type: boolean
-        default: true
+        default: false
       no_debloat:
         description: Keep the apps MysticGSI would otherwise remove
         required: true
@@ -111,7 +111,8 @@ jobs:
     timeout-minutes: 360
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
-      artifact: ${{ steps.meta.outputs.artifact }}
+      image_artifact: ${{ steps.meta.outputs.image_artifact }}
+      meta_artifact: ${{ steps.meta.outputs.meta_artifact }}
       commit: ${{ steps.fetch.outputs.commit }}
 
     env:
@@ -142,7 +143,8 @@ jobs:
           fi
           stamp="$(date -u +%Y%m%d-%H%M)"
           echo "tag=mystic-gsi-${BUILD_NAME}-${stamp}" >> "$GITHUB_OUTPUT"
-          echo "artifact=mystic-gsi-${BUILD_NAME}-${stamp}" >> "$GITHUB_OUTPUT"
+          echo "image_artifact=mystic-gsi-${BUILD_NAME}-${stamp}-image" >> "$GITHUB_OUTPUT"
+          echo "meta_artifact=mystic-gsi-${BUILD_NAME}-${stamp}-meta" >> "$GITHUB_OUTPUT"
           # Avoid leaking signed-URL credentials into logs.
           case "${FIRMWARE}" in
             *token=* | *sig=* | *X-Amz-*) echo "::add-mask::${FIRMWARE}" ;;
@@ -198,12 +200,26 @@ jobs:
       - name: Collect outputs
         run: bash scripts/collect-outputs.sh
 
-      - name: Upload artifact
+      - name: Upload image artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.meta.outputs.artifact }}
-          path: artifacts/**
+          name: ${{ steps.meta.outputs.image_artifact }}
+          path: artifacts/**/*.img
           if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
+
+      - name: Upload metadata artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.meta.outputs.meta_artifact }}
+          path: |
+            artifacts/build-info.txt
+            artifacts/SHA256SUMS
+            artifacts/build.log
+            artifacts/gsilist.json
+            artifacts/**/output.txt
+          if-no-files-found: warn
           retention-days: ${{ inputs.retention_days }}
           compression-level: 0
 
@@ -211,7 +227,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.meta.outputs.artifact }}-logs
+          name: ${{ steps.meta.outputs.image_artifact }}-logs
           path: mysticgsi/build.log
           if-no-files-found: ignore
           retention-days: 7
@@ -267,11 +283,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Download artifact
+      - name: Download metadata artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build.outputs.artifact }}
-          path: artifacts
+          name: ${{ needs.build.outputs.meta_artifact }}
+          path: release-files
 
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -286,6 +302,10 @@ jobs:
             - Format: `${{ inputs.format }}`
             - Compress: `${{ inputs.compress }}`
             - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          files: artifacts/**/*
+
+            **Getting the image:** GitHub caps release assets at 2 GB, so the raw GSI is *not* attached here.
+            Download it from the workflow run's `mystic-gsi-*-image` artifact, or run **Get image from workflow run**
+            with run ID `${{ github.run_id }}`. `SHA256SUMS` in this release verifies that image.
+          files: release-files/**
           fail_on_unmatched_files: true
           generate_release_notes: true

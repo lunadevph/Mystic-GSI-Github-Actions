@@ -1,0 +1,138 @@
+name: Get image from workflow run
+
+# Pulls the raw GSI (no ZIP, no re-encoding) out of a previous build run,
+# verifies it with that run's SHA256SUMS, and re-uploads it here.
+# GitHub caps release assets at 2 GB, so the image lives in Actions artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Workflow run ID that produced the GSI
+        required: true
+        type: string
+      artifact_name:
+        description: Image artifact name (blank = find the "-image" artifact in that run)
+        required: false
+        default: ""
+        type: string
+      retention_days:
+        description: Retention for the re-uploaded image artifact
+        required: false
+        default: 14
+        type: number
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: get-image-${{ inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Resolve artifacts in source run
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/${GH_REPO}/actions/runs/${RUN_ID}/artifacts" --paginate > artifacts.json
+
+          image="$(jq -s -r --arg provided "${ARTIFACT_NAME}" '
+            def arts: [.[].artifacts[]];
+            if $provided != "" then $provided
+            else (arts | map(select(.name | endswith("-image"))) | first | .name // "")
+            end' artifacts.json)"
+          meta="$(jq -s -r '
+            ([.[].artifacts[] | select(.name | endswith("-meta"))] | first | .name // "")' artifacts.json)"
+
+          if [ -z "${image}" ]; then
+            echo "::error::No '-image' artifact found in run ${RUN_ID}; pass artifact_name explicitly"
+            exit 1
+          fi
+
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "meta=${meta}" >> "$GITHUB_OUTPUT"
+          echo "Image artifact: ${image}"
+          echo "Metadata artifact: ${meta:-<none>}"
+
+      - name: Download system image
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.resolve.outputs.image }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: bundle
+
+      - name: Download checksums and build info
+        if: ${{ steps.resolve.outputs.meta != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.resolve.outputs.meta }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: bundle
+
+      - name: Verify image
+        id: verify
+        run: |
+          set -euo pipefail
+
+          mapfile -t images < <(find bundle -type f -name '*.img' | sort)
+          if [ "${#images[@]}" -eq 0 ]; then
+            echo "::error::No .img file found in the downloaded artifact"
+            exit 1
+          fi
+
+          echo "::group::Images"
+          for image in "${images[@]}"; do
+            echo "$(du -h "${image}" | cut -f1)  ${image}"
+          done
+          echo "::endgroup::"
+
+          if [ -f bundle/SHA256SUMS ]; then
+            grep -E '\.img$' bundle/SHA256SUMS > /tmp/image-sums || true
+            if [ -s /tmp/image-sums ]; then
+              ( cd bundle && sha256sum -c /tmp/image-sums )
+            else
+              echo "::warning::SHA256SUMS has no .img entries"
+            fi
+          else
+            echo "::warning::No SHA256SUMS found; computing fresh checksums"
+            ( cd bundle && find . -type f -name '*.img' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.local )
+          fi
+
+          echo "count=${#images[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload image from run
+        uses: actions/upload-artifact@v7
+        with:
+          name: mystic-gsi-image-from-run-${{ inputs.run_id }}
+          path: bundle/**
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
+
+      - name: Summarize
+        run: |
+          {
+            echo "## Image retrieved from run ${{ inputs.run_id }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Source artifact | \`${{ steps.resolve.outputs.image }}\` |"
+            echo "| Image files | ${{ steps.verify.outputs.count }} |"
+            echo "| Source run | \`${{ inputs.run_id }}\` |"
+            echo ""
+            echo "Download the raw \`.img\` from this run's **mystic-gsi-image-from-run-${{ inputs.run_id }}** artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
