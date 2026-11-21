@@ -6,6 +6,7 @@ This repository drives [MysticGSI](https://github.com/MysticGSI/mysticgsi) from 
 
 | Workflow step | Script | What it does |
 | --- | --- | --- |
+| Preflight firmware | `scripts/preflight-firmware.sh` | Validates local `.tgz`/`.tar.gz`/tar archives early; URLs are checked by MysticGSI after download. |
 | Free disk space | `scripts/free-disk.sh` | Removes unused preinstalled toolchains on GitHub-hosted runners. |
 | Fetch MysticGSI | `scripts/fetch-mysticgsi.sh` | Shallow-fetches `MYSTIC_REF` into `mysticgsi/` and records the commit. |
 | Set up MysticGSI | `scripts/setup-mysticgsi.sh` | Runs upstream `setup_host.py` (apt packages, `.venv`, requirements). |
@@ -38,6 +39,23 @@ name: raven
 firmware: https://dl.google.com/dl/android/aosp/raven-up1a.231105.003-factory-76a795d5.zip
 type: pixel
 format: ext4
+```
+
+### Fastboot `.tgz` package
+
+MysticGSI recognizes `.tgz` / `.tar.gz` natively and extracts the partition images itself. The wrapper only preflights a local copy (gzip integrity + tar structure) so a truncated download fails immediately with a clear message.
+
+```yaml
+name: fastboot
+firmware: https://example.com/firmware.tgz
+type: auto
+format: ext4
+```
+
+For a local file on a self-hosted runner, pass the path directly:
+
+```yaml
+firmware: /srv/firmware/firmware.tgz
 ```
 
 ### Samsung One UI tar
@@ -127,7 +145,7 @@ A build peak includes:
 
 ## Debugging a failed run
 
-1. Check the **`<artifact>-logs`** artifact, which is uploaded when the build fails and contains `build.log`. On success the same log is inside the main artifact.
+1. Check the **Preflight firmware** step output for `.tgz` integrity errors, and the **`<artifact>-logs`** artifact for full `cli.py` output when the build fails. On success that log is inside the main artifact.
 2. Confirm the firmware URL is direct and reachable.
 3. Re-run with an explicit `type`.
 4. Check free space in the **Free disk space** step output.

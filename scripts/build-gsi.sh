@@ -39,6 +39,13 @@ if [[ "${FIRMWARE}" != *://* ]] && [ ! -f "${FIRMWARE}" ]; then
   die "firmware file not found: ${FIRMWARE}"
 fi
 
+# Fail early with a clear message if a local .tgz (or other tar) is corrupt.
+# Extraction itself is still done by MysticGSI.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${script_dir}/preflight-firmware.sh" ]; then
+  FIRMWARE="${FIRMWARE}" bash "${script_dir}/preflight-firmware.sh"
+fi
+
 args=(build "${BUILD_NAME}" "${FIRMWARE}" --type "${TYPE}")
 if [ "${FORMAT}" != "ext4" ]; then
   args+=(--format "${FORMAT}")

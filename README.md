@@ -17,7 +17,7 @@ This repository is a **thin wrapper around [MysticGSI](https://github.com/Mystic
 ## Supported firmware (via MysticGSI)
 
 - Full OTA zips (`payload.bin`)
-- Fastboot packages
+- Fastboot packages, including `.tgz` / `.tar.gz` archives
 - `super.img` and sparse images
 - `system.new.dat` ROM zips
 - Samsung tars (`.tar.md5`)
@@ -134,6 +134,7 @@ cd mysticgsi
 
 - **`No space left on device`** — use a larger or self-hosted runner. The cleanup step frees several GB but cannot beat large firmware.
 - **Download fails** — MysticGSI uses `aria2c` and needs a direct link; Google Drive/MEGA share pages are not supported. Host the file somewhere with a stable direct URL.
+- **Corrupt `.tgz`** — the wrapper preflights local `.tgz`/`.tar.gz` files with `gzip -t` and `tar -tzf` and fails with a clear message before the slow setup steps. For URLs, the check happens inside MysticGSI after download. Extraction itself is always done by MysticGSI.
 - **Signed firmware URLs** — `aria2c` prints the URL it downloads, so tokens can appear in `build.log`. The wrapper masks `token=`/`sig=`/`X-Amz-` URLs and strips query strings from summaries, but prefer a credential-free link.
 - **Type detection failed** — set `type` explicitly (`oneui`, `hyperos`, `miui`, `pixel`, `coloros`, …), or use `type_override`.
 - **`aria2c not found`** — `setup_host.py` installs it on Debian/Ubuntu; install `aria2` manually on custom runners.

@@ -45,3 +45,18 @@ jobs:
             bash -n "$script"
             echo "ok: $script"
           done
+
+      - name: Firmware preflight smoke test
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          mkdir -p "$work/images"
+          printf 'fake system image' > "$work/images/system.img"
+          tar -czf "$work/firmware.tgz" -C "$work/images" system.img
+          FIRMWARE="$work/firmware.tgz" bash scripts/preflight-firmware.sh
+
+          printf 'not a gzip stream' > "$work/broken.tgz"
+          if FIRMWARE="$work/broken.tgz" bash scripts/preflight-firmware.sh; then
+            echo "expected a corrupt .tgz to fail preflight" >&2
+            exit 1
+          fi

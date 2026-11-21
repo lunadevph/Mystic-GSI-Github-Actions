@@ -150,6 +150,9 @@ jobs:
           echo "Build name: ${BUILD_NAME}"
           echo "Firmware: ${FIRMWARE%%\?*}"
 
+      - name: Preflight firmware
+        run: bash scripts/preflight-firmware.sh
+
       - name: Free disk space
         run: bash scripts/free-disk.sh
 
