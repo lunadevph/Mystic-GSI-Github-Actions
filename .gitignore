@@ -1,14 +1,16 @@
+# Upstream MysticGSI checkout (fetched at runtime)
+/mysticgsi/
+
 # Build outputs
 /artifacts/
-/source/
 /out/
+/tmp/
 *.img
-*.img.xz
-*.img.xz.sha256
-
-# Tooling caches
-/.ccache/
-/.repo/
+*.img.zip
+*.zip
+*.log
+SHA256SUMS
+build-info.txt
 
 # OS / editor noise
 .DS_Store

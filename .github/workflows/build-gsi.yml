@@ -1,37 +1,91 @@
-name: Build Mystic GSI
+name: Build GSI from OEM firmware
+
+# Thin wrapper around MysticGSI (https://github.com/MysticGSI/mysticgsi).
+# All extraction, patching, and image generation is done by MysticGSI itself.
 
 on:
   workflow_dispatch:
     inputs:
-      variant:
-        description: GSI lunch target
+      name:
+        description: Build name (letters, digits, dot, dash, underscore; max 64)
+        required: true
+        default: mystic
+        type: string
+      firmware:
+        description: Firmware URL, or path on the runner (path needs a self-hosted runner)
+        required: true
+        type: string
+      type:
+        description: ROM type (auto detects; set explicitly if detection fails)
         required: true
         type: choice
-        default: treble_arm64_bvN
+        default: auto
         options:
-          - treble_arm64_bvN
-          - treble_arm64_bgN
-          - treble_arm64_avN
-          - treble_arm64_agN
-          - treble_arm32_bvN
-          - treble_arm32_bgN
-          - treble_a64_bvN
-          - treble_a64_bgN
-      manifest_url:
-        description: Manifest repository (TrebleDroid-compatible)
-        required: true
+          - auto
+          - generic
+          - custom
+          - pixel
+          - alos
+          - emui
+          - magicos
+          - harmonyos
+          - zui
+          - nothing
+          - realmeui
+          - oxygenos
+          - coloros
+          - oneui
+          - miui
+          - hyperos
+          - joyui
+          - myos
+          - redmagic
+          - nebulaos
+      type_override:
+        description: Optional TYPE:OVERRIDE suffix (only used with auto/generic/custom)
+        required: false
+        default: ""
         type: string
-        default: https://github.com/TrebleDroid/treble_manifest.git
-      manifest_branch:
-        description: Manifest branch (list with `git ls-remote --heads <url>`)
+      format:
+        description: Output filesystem
         required: true
+        type: choice
+        default: ext4
+        options:
+          - ext4
+          - lz4
+          - lz4hc
+          - lzma
+      compress:
+        description: Also produce a ZIP next to the image
+        required: true
+        type: boolean
+        default: true
+      no_debloat:
+        description: Keep the apps MysticGSI would otherwise remove
+        required: true
+        type: boolean
+        default: false
+      no_merge:
+        description: Keep separate partitions instead of merging into system
+        required: true
+        type: boolean
+        default: false
+      add_tag:
+        description: Tag appended to the build display name
+        required: false
+        default: ""
         type: string
-        default: android-14.0.0_r1
+      mystic_ref:
+        description: MysticGSI branch, tag, or full commit SHA
+        required: true
+        default: main
+        type: string
       runner:
-        description: Runner label (needs ~16 cores, 64 GB RAM, 200 GB free disk)
+        description: Runner label (large firmware needs disk; self-hosted recommended)
         required: true
-        type: string
         default: ubuntu-latest
+        type: string
       upload_release:
         description: Publish a GitHub release with the image
         required: true
@@ -40,11 +94,11 @@ on:
       retention_days:
         description: Artifact retention in days
         required: false
-        type: number
         default: 14
+        type: number
 
 concurrency:
-  group: gsi-${{ github.ref }}-${{ inputs.variant }}
+  group: mysticgsi-${{ github.ref }}-${{ inputs.name }}
   cancel-in-progress: false
 
 permissions:
@@ -52,81 +106,154 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ inputs.variant }}
+    name: Convert firmware
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       artifact: ${{ steps.meta.outputs.artifact }}
+      commit: ${{ steps.fetch.outputs.commit }}
 
     env:
-      MANIFEST_URL: ${{ inputs.manifest_url }}
-      MANIFEST_BRANCH: ${{ inputs.manifest_branch }}
-      LUNCH_TARGET: ${{ inputs.variant }}
-      SOURCE_DIR: ${{ github.workspace }}/source
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 5G
+      MYSTIC_DIR: ${{ github.workspace }}/mysticgsi
+      MYSTIC_REF: ${{ inputs.mystic_ref }}
+      BUILD_NAME: ${{ inputs.name }}
+      FIRMWARE: ${{ inputs.firmware }}
+      TYPE: "${{ inputs.type_override != '' && format('{0}:{1}', inputs.type, inputs.type_override) || inputs.type }}"
+      FORMAT: ${{ inputs.format }}
+      COMPRESS: ${{ inputs.compress }}
+      NO_DEBLOAT: ${{ inputs.no_debloat }}
+      NO_MERGE: ${{ inputs.no_merge }}
+      ADD_TAG: ${{ inputs.add_tag }}
+      ARTIFACT_DIR: ${{ github.workspace }}/artifacts
+      PYTHONUNBUFFERED: "1"
 
     steps:
-      - name: Check out pipeline
+      - name: Check out wrapper
         uses: actions/checkout@v4
 
       - name: Prepare metadata
         id: meta
         run: |
           set -euo pipefail
+          if ! [[ "${BUILD_NAME}" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo "::error::Invalid build name '${BUILD_NAME}' (letters, digits, dot, dash, underscore; max 64)"
+            exit 1
+          fi
           stamp="$(date -u +%Y%m%d-%H%M)"
-          tag="mystic-${LUNCH_TARGET}-${stamp}"
-          artifact="mystic-gsi-${LUNCH_TARGET}-${stamp}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
-          echo "Building ${LUNCH_TARGET} from ${MANIFEST_URL}@${MANIFEST_BRANCH}"
-          echo "Release tag: ${tag}"
+          echo "tag=mystic-gsi-${BUILD_NAME}-${stamp}" >> "$GITHUB_OUTPUT"
+          echo "artifact=mystic-gsi-${BUILD_NAME}-${stamp}" >> "$GITHUB_OUTPUT"
+          # Avoid leaking signed-URL credentials into logs.
+          case "${FIRMWARE}" in
+            *token=* | *sig=* | *X-Amz-*) echo "::add-mask::${FIRMWARE}" ;;
+          esac
+          echo "Build name: ${BUILD_NAME}"
+          echo "Firmware: ${FIRMWARE%%\?*}"
 
-      - name: Prepare runner
-        run: bash scripts/00-setup-runner.sh
+      - name: Free disk space
+        run: bash scripts/free-disk.sh
 
-      - name: Restore ccache
+      - name: Fetch MysticGSI
+        id: fetch
+        run: bash scripts/fetch-mysticgsi.sh
+
+      - name: Restore pip cache
         uses: actions/cache@v4
         with:
-          path: .ccache
-          key: ccache-${{ inputs.manifest_branch }}-${{ inputs.variant }}-${{ github.run_id }}
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('mysticgsi/requirements.txt') }}
           restore-keys: |
-            ccache-${{ inputs.manifest_branch }}-${{ inputs.variant }}-
-            ccache-${{ inputs.manifest_branch }}-
+            pip-${{ runner.os }}-
 
-      - name: Sync sources
-        run: bash scripts/10-sync.sh
+      - name: Set up MysticGSI
+        run: bash scripts/setup-mysticgsi.sh
 
-      - name: Build system image
-        run: bash scripts/20-build.sh
+      - name: Prepare AVB key
+        env:
+          AVB_KEY_PEM: ${{ secrets.MYSTIC_AVB_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AVB_KEY_PEM:-}" ]; then
+            echo "MYSTIC_AVB_KEY not set; MysticGSI will use its bundled AOSP test key."
+            exit 0
+          fi
+          key="${RUNNER_TEMP}/avb-key.pem"
+          umask 077
+          first_line="${AVB_KEY_PEM%%$'\n'*}"
+          if [[ "${first_line}" == *"BEGIN "*"PRIVATE KEY"* ]]; then
+            printf '%s\n' "${AVB_KEY_PEM}" > "${key}"
+          else
+            printf '%s' "${AVB_KEY_PEM}" | base64 -d > "${key}"
+          fi
+          openssl pkey -in "${key}" -noout
+          echo "AVB_KEY=${key}" >> "$GITHUB_ENV"
+          echo "Using a custom AVB signing key."
 
-      - name: Package image
-        run: bash scripts/30-package.sh
+      - name: Build GSI
+        run: bash scripts/build-gsi.sh
+
+      - name: Collect outputs
+        run: bash scripts/collect-outputs.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.artifact }}
-          path: artifacts/*
+          path: artifacts/**
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact }}-logs
+          path: mysticgsi/build.log
+          if-no-files-found: ignore
+          retention-days: 7
           compression-level: 0
 
       - name: Summarize
         if: always()
         run: |
           {
-            echo "## Mystic GSI build"
+            echo "## MysticGSI build"
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Variant | \`${LUNCH_TARGET}\` |"
-            echo "| Manifest | \`${MANIFEST_URL}\` |"
-            echo "| Branch | \`${MANIFEST_BRANCH}\` |"
+            echo "| Build name | \`${BUILD_NAME}\` |"
+            echo "| ROM type | \`${TYPE}\` |"
+            echo "| Format | \`${FORMAT}\` |"
+            echo "| Compress | \`${COMPRESS}\` |"
+            echo "| Upstream commit | \`${{ steps.fetch.outputs.commit }}\` |"
             echo "| Runner | \`${{ inputs.runner }}\` |"
             echo "| Status | ${{ job.status }} |"
+            echo ""
+            echo "Firmware: \`${FIRMWARE%%\?*}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -d artifacts ]; then
+            {
+              echo ""
+              echo "### Artifacts"
+              echo '```'
+              find artifacts -type f -printf '%10s  %p\n' | sort -k2
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ -f mysticgsi/build.log ]; then
+            {
+              echo ""
+              echo "<details><summary>Build log (tail)</summary>"
+              echo ""
+              echo '```'
+              tail -n 80 mysticgsi/build.log
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   release:
     name: Publish release
@@ -147,14 +274,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build.outputs.tag }}
-          name: Mystic GSI ${{ inputs.variant }} (${{ needs.build.outputs.tag }})
+          name: MysticGSI ${{ inputs.name }} (${{ needs.build.outputs.tag }})
           body: |
-            Automated Mystic GSI build.
+            Built from OEM firmware with [MysticGSI](https://github.com/MysticGSI/mysticgsi) at `${{ needs.build.outputs.commit }}`.
 
-            - Variant: `${{ inputs.variant }}`
-            - Manifest: `${{ inputs.manifest_url }}`
-            - Branch: `${{ inputs.manifest_branch }}`
+            - Build name: `${{ inputs.name }}`
+            - ROM type: `${{ inputs.type }}`
+            - Format: `${{ inputs.format }}`
+            - Compress: `${{ inputs.compress }}`
             - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          files: artifacts/*
+          files: artifacts/**/*
           fail_on_unmatched_files: true
           generate_release_notes: true
