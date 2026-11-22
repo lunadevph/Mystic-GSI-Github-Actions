@@ -1,4 +1,4 @@
-# Mystic GSI — GitHub Actions
+# Mystic GSI - GitHub Actions
 
 Turn **OEM stock firmware into a flashable GSI** with GitHub Actions.
 
